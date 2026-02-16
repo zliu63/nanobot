@@ -411,6 +411,109 @@ def gateway(
     asyncio.run(run())
 
 
+@app.command()
+def serve(
+    port: int = typer.Option(8001, "--port", "-p", help="HTTP port for headless mode"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+):
+    """Run agent in headless HTTP mode (no channels, API only)."""
+    from aiohttp import web as aioweb
+    from nanobot.config.loader import load_config, get_data_dir
+    from nanobot.bus.queue import MessageBus
+    from nanobot.agent.loop import AgentLoop
+    from nanobot.session.manager import SessionManager
+    from nanobot.cron.service import CronService
+    from nanobot.cron.types import CronJob
+    from nanobot.heartbeat.service import HeartbeatService
+
+    if verbose:
+        import logging
+        logging.basicConfig(level=logging.DEBUG)
+
+    console.print(f"{__logo__} Starting nanobot headless on port {port}...")
+
+    config = load_config()
+    bus = MessageBus()
+    provider = _make_provider(config)
+    session_manager = SessionManager(config.workspace_path)
+
+    cron_store_path = get_data_dir() / "cron" / "jobs.json"
+    cron = CronService(cron_store_path)
+
+    agent = AgentLoop(
+        bus=bus,
+        provider=provider,
+        workspace=config.workspace_path,
+        model=config.agents.defaults.model,
+        temperature=config.agents.defaults.temperature,
+        max_tokens=config.agents.defaults.max_tokens,
+        max_iterations=config.agents.defaults.max_tool_iterations,
+        memory_window=config.agents.defaults.memory_window,
+        brave_api_key=config.tools.web.search.api_key or None,
+        exec_config=config.tools.exec,
+        cron_service=cron,
+        restrict_to_workspace=config.tools.restrict_to_workspace,
+        session_manager=session_manager,
+    )
+
+    async def on_cron_job(job: CronJob) -> str | None:
+        response = await agent.process_direct(
+            job.payload.message,
+            session_key=f"cron:{job.id}",
+            channel=job.payload.channel or "cli",
+            chat_id=job.payload.to or "direct",
+        )
+        if job.payload.deliver and job.payload.to:
+            from nanobot.bus.events import OutboundMessage
+            await bus.publish_outbound(OutboundMessage(
+                channel=job.payload.channel or "cli",
+                chat_id=job.payload.to,
+                content=response or ""
+            ))
+        return response
+    cron.on_job = on_cron_job
+
+    async def on_heartbeat(prompt: str) -> str:
+        return await agent.process_direct(prompt, session_key="heartbeat")
+
+    heartbeat = HeartbeatService(
+        workspace=config.workspace_path,
+        on_heartbeat=on_heartbeat,
+        interval_s=30 * 60,
+        enabled=True,
+    )
+
+    async def handle_message(request):
+        data = await request.json()
+        content = data.get("content", "")
+        channel = data.get("channel", "api")
+        chat_id = data.get("chat_id", "direct")
+        session_key = f"{channel}:{chat_id}"
+        response = await agent.process_direct(
+            content=content,
+            session_key=session_key,
+            channel=channel,
+            chat_id=chat_id,
+        )
+        return aioweb.json_response({"content": response})
+
+    async def handle_health(request):
+        return aioweb.json_response({"status": "ok"})
+
+    webapp = aioweb.Application()
+    webapp.router.add_post("/message", handle_message)
+    webapp.router.add_get("/health", handle_health)
+
+    async def on_startup(_app):
+        asyncio.create_task(cron.start())
+        asyncio.create_task(heartbeat.start())
+        asyncio.create_task(agent.run())
+
+    webapp.on_startup.append(on_startup)
+
+    console.print(f"[green]✓[/green] Headless mode ready on port {port}")
+    aioweb.run_app(webapp, port=port, print=None)
+
 
 
 # ============================================================================
