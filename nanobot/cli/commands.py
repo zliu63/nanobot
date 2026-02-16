@@ -488,14 +488,68 @@ def serve(
         content = data.get("content", "")
         channel = data.get("channel", "api")
         chat_id = data.get("chat_id", "direct")
+        callback_url = data.get("callback_url")
         session_key = f"{channel}:{chat_id}"
-        response = await agent.process_direct(
-            content=content,
-            session_key=session_key,
-            channel=channel,
-            chat_id=chat_id,
-        )
-        return aioweb.json_response({"content": response})
+
+        if callback_url:
+            # Async mode: return immediately, send results via callback
+            async def process_and_callback():
+                import httpx as httpx_client
+                from nanobot.bus.events import OutboundMessage
+
+                # Wire message tool to send via callback URL
+                async def send_via_callback(msg: OutboundMessage):
+                    async with httpx_client.AsyncClient(timeout=30) as c:
+                        await c.post(callback_url, json={
+                            "chat_id": msg.chat_id,
+                            "content": msg.content,
+                        })
+
+                message_tool = agent.tools.get("message")
+                original_callback = message_tool._send_callback if message_tool else None
+                if message_tool:
+                    message_tool.set_send_callback(send_via_callback)
+
+                try:
+                    response = await agent.process_direct(
+                        content=content,
+                        session_key=session_key,
+                        channel=channel,
+                        chat_id=chat_id,
+                    )
+                    # Send final result via callback
+                    if response:
+                        async with httpx_client.AsyncClient(timeout=30) as c:
+                            await c.post(callback_url, json={
+                                "chat_id": chat_id,
+                                "content": response,
+                            })
+                except Exception as e:
+                    print(f"[nanobot] Async processing error: {e}")
+                    try:
+                        async with httpx_client.AsyncClient(timeout=10) as c:
+                            await c.post(callback_url, json={
+                                "chat_id": chat_id,
+                                "content": f"(Error processing request: {e})",
+                            })
+                    except Exception:
+                        pass
+                finally:
+                    # Restore original callback
+                    if message_tool and original_callback:
+                        message_tool.set_send_callback(original_callback)
+
+            asyncio.create_task(process_and_callback())
+            return aioweb.json_response({"status": "accepted"})
+        else:
+            # Sync mode (backward compatible)
+            response = await agent.process_direct(
+                content=content,
+                session_key=session_key,
+                channel=channel,
+                chat_id=chat_id,
+            )
+            return aioweb.json_response({"content": response})
 
     async def handle_health(request):
         return aioweb.json_response({"status": "ok"})
