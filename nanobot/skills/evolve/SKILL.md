@@ -41,3 +41,4 @@ You are running as part of a blue/green deployment. You can modify the **standby
 - **NEVER** modify the **active** copy (yourself) — only the standby
 - **NEVER** create `.swap-ready` unless all tests pass
 - Keep changes small and incremental — one improvement per evolution cycle
+- **NEVER** run `git` commands — the orchestrator handles all git commits and pushes automatically
