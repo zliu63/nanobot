@@ -1,0 +1,6 @@
+# Runtime data — lives in ~/.nanobot/workspace/, not here
+memory/memories.jsonl
+memory/HISTORY.md
+../signals/
+../experiments/
+../evolution_log.md

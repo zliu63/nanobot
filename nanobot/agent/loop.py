@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +21,9 @@ from nanobot.agent.tools.message import MessageTool
 from nanobot.agent.tools.spawn import SpawnTool
 from nanobot.agent.tools.cron import CronTool
 from nanobot.agent.memory import MemoryStore
+from nanobot.agent.self_evolution import SelfAuditEngine
 from nanobot.agent.subagent import SubagentManager
+from nanobot.utils.helpers import ensure_dir
 from nanobot.session.manager import Session, SessionManager
 
 
@@ -83,6 +87,7 @@ class AgentLoop:
         
         self._running = False
         self._register_default_tools()
+        self._audit_engine = SelfAuditEngine(workspace)
     
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
@@ -130,7 +135,7 @@ class AgentLoop:
             if isinstance(cron_tool, CronTool):
                 cron_tool.set_context(channel, chat_id)
 
-    async def _run_agent_loop(self, initial_messages: list[dict]) -> tuple[str | None, list[str]]:
+    async def _run_agent_loop(self, initial_messages: list[dict]) -> tuple[str | None, list[str], int, int]:
         """
         Run the agent iteration loop.
 
@@ -138,12 +143,13 @@ class AgentLoop:
             initial_messages: Starting messages for the LLM conversation.
 
         Returns:
-            Tuple of (final_content, list_of_tools_used).
+            Tuple of (final_content, tools_used, tool_failures, llm_calls).
         """
         messages = initial_messages
         iteration = 0
         final_content = None
         tools_used: list[str] = []
+        tool_failures = 0
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -178,6 +184,8 @@ class AgentLoop:
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info(f"Tool call: {tool_call.name}({args_str[:200]})")
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
+                    if isinstance(result, str) and result.startswith("Error"):
+                        tool_failures += 1
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
@@ -186,7 +194,7 @@ class AgentLoop:
                 final_content = response.content
                 break
 
-        return final_content, tools_used
+        return final_content, tools_used, tool_failures, iteration
 
     async def run(self) -> None:
         """Run the agent loop, processing messages from the bus."""
@@ -271,19 +279,36 @@ class AgentLoop:
             channel=msg.channel,
             chat_id=msg.chat_id,
         )
-        final_content, tools_used = await self._run_agent_loop(initial_messages)
+        t_start = time.perf_counter()
+        final_content, tools_used, tool_failures, llm_calls = await self._run_agent_loop(initial_messages)
+        elapsed_ms = int((time.perf_counter() - t_start) * 1000)
 
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
-        
+
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info(f"Response to {msg.channel}:{msg.sender_id}: {preview}")
-        
+
         session.add_message("user", msg.content)
         session.add_message("assistant", final_content,
                             tools_used=tools_used if tools_used else None)
         self.sessions.save(session)
-        
+
+        # Phase 0: signal collection (fire-and-forget, never blocks response)
+        asyncio.create_task(self._collect_signals(
+            session=session,
+            msg=msg,
+            final_content=final_content,
+            tools_used=tools_used,
+            tool_failures=tool_failures,
+            llm_calls=llm_calls,
+            elapsed_ms=elapsed_ms,
+        ))
+
+        # Phase 0: memory reflection (only when conversation is substantive)
+        if self._should_reflect(msg.content, session):
+            asyncio.create_task(self._reflect_on_memory(session, msg.content, final_content))
+
         return OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,
@@ -319,7 +344,7 @@ class AgentLoop:
             channel=origin_channel,
             chat_id=origin_chat_id,
         )
-        final_content, _ = await self._run_agent_loop(initial_messages)
+        final_content, _, _tf, _lc = await self._run_agent_loop(initial_messages)
 
         if final_content is None:
             final_content = "Background task completed."
@@ -334,6 +359,170 @@ class AgentLoop:
             content=final_content
         )
     
+    # ──────────────────────────────────────────────────────────────────────
+    # Phase 0: Signal collection & memory reflection
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _should_reflect(self, user_message: str, session) -> bool:
+        """Decide whether to trigger memory reflection after this turn."""
+        # Always reflect if correction detected
+        if self._detect_correction(user_message):
+            return True
+        # Reflect after 3+ complete turns (6 messages = 3 user + 3 assistant)
+        if len(session.messages) >= 6:
+            return True
+        return False
+
+    def _detect_correction(self, text: str) -> bool:
+        """Heuristic: did the user correct a previous response?"""
+        markers = [
+            "不对", "错了", "不是", "不对吧", "我说的是", "我的意思是", "你理解错",
+            "that's wrong", "not right", "actually,", "no,", "you misunderstood",
+            "i meant", "incorrect",
+        ]
+        lower = text.lower()
+        return any(m in lower for m in markers)
+
+    async def _collect_signals(
+        self,
+        session,
+        msg,
+        final_content: str,
+        tools_used: list[str],
+        tool_failures: int,
+        llm_calls: int,
+        elapsed_ms: int,
+    ) -> None:
+        """Record interaction quality signals to workspace/signals/signals.jsonl."""
+        try:
+            signals_dir = ensure_dir(self.workspace / "signals")
+            signals_file = signals_dir / "signals.jsonl"
+
+            # Count user messages in the session to estimate turn count
+            user_turns = sum(1 for m in session.messages if m.get("role") == "user")
+
+            signal = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "session_id": session.key,
+                "signals": {
+                    "conversation_turns": user_turns,
+                    "user_correction_detected": self._detect_correction(msg.content),
+                    "tools_used": sorted(set(tools_used)),
+                    "tool_use_count": len(tools_used),
+                    "tool_failures": tool_failures,
+                    "total_llm_calls": llm_calls,
+                    "response_length_chars": len(final_content),
+                    "elapsed_ms": elapsed_ms,
+                    "channel": msg.channel,
+                },
+            }
+            with open(signals_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(signal, ensure_ascii=False) + "\n")
+
+            # Phase 1: trigger self-audit if enough signals have accumulated
+            if self._audit_engine.should_audit():
+                asyncio.create_task(self._run_self_audit())
+
+        except Exception as e:
+            logger.debug(f"Signal collection failed (non-critical): {e}")
+
+    async def _run_self_audit(self) -> None:
+        """Fire-and-forget wrapper around SelfAuditEngine.run_audit()."""
+        try:
+            result = await self._audit_engine.run_audit(self.provider, self.model)
+            if result:
+                diag = result.get("diagnosis", "")[:120]
+                logger.info(f"Self-audit complete: {diag}")
+        except Exception as e:
+            logger.debug(f"Self-audit failed (non-critical): {e}")
+
+    async def _reflect_on_memory(
+        self,
+        session,
+        user_message: str,
+        assistant_response: str,
+    ) -> None:
+        """LLM-driven memory reflection: decide what to add/update/delete.
+
+        Runs as a background task after substantive conversations.
+        Does a single LLM call, applies JSON operations to memories.jsonl.
+        """
+        try:
+            memory = MemoryStore(self.workspace)
+
+            # Build a compact conversation excerpt (last 3 turns max)
+            recent = session.messages[-6:] if len(session.messages) >= 6 else session.messages
+            convo_lines: list[str] = []
+            for m in recent:
+                content = m.get("content", "")
+                if content:
+                    role = m["role"].upper()
+                    convo_lines.append(f"[{role}] {content[:400]}")
+
+            memory_summary = memory.build_memory_summary()
+
+            prompt = f"""You are a memory management agent. Based on the conversation below, decide what structured memories to create, update, or remove.
+
+## Current Structured Memory State
+{memory_summary or "(empty — this is the first reflection)"}
+
+## Recent Conversation
+{chr(10).join(convo_lines)}
+
+Respond with ONLY valid JSON (no markdown fences). Use these optional keys:
+- "add": list of {{"content": str, "category": str, "tags": list[str]}}
+- "update": list of {{"id": str, "content": str}}
+- "delete": list of memory IDs (string)
+
+Valid categories: user_preference, project_context, technical_fact, relationship, daily_event
+
+Rules:
+- Only add facts that are genuinely worth remembering long-term (not transient info)
+- Only update if the new information clearly supersedes the old
+- Only delete if the existing memory is factually wrong or entirely irrelevant
+- Return {{}} if nothing needs to change
+
+Example: {{"add": [{{"content": "User is migrating a Flask app to FastAPI", "category": "project_context", "tags": ["fastapi", "flask", "python"]}}]}}"""
+
+            response = await self.provider.chat(
+                messages=[
+                    {"role": "system", "content": "You are a memory management agent. Respond only with valid JSON."},
+                    {"role": "user", "content": prompt},
+                ],
+                model=self.model,
+                max_tokens=1024,
+                temperature=0.3,
+            )
+
+            text = (response.content or "").strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+
+            ops: dict = json.loads(text)
+
+            added = updated = deleted = 0
+            for item in ops.get("add", []):
+                memory.add_memory(
+                    content=item["content"],
+                    category=item.get("category", "general"),
+                    tags=item.get("tags", []),
+                )
+                added += 1
+
+            for item in ops.get("update", []):
+                if memory.update_memory(item["id"], content=item["content"]):
+                    updated += 1
+
+            for mem_id in ops.get("delete", []):
+                if memory.delete_memory(str(mem_id)):
+                    deleted += 1
+
+            if added + updated + deleted > 0:
+                logger.info(f"Memory reflection: +{added} updated={updated} deleted={deleted}")
+
+        except Exception as e:
+            logger.debug(f"Memory reflection failed (non-critical): {e}")
+
     async def _consolidate_memory(self, session, archive_all: bool = False) -> None:
         """Consolidate old messages into MEMORY.md + HISTORY.md.
 
