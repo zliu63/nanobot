@@ -1,8 +1,10 @@
 """Tool registry for dynamic tool management."""
 
 from typing import Any
+import time
 
 from nanobot.agent.tools.base import Tool
+from nanobot.agent.tools.monitoring import monitor
 
 
 class ToolRegistry:
@@ -51,14 +53,22 @@ class ToolRegistry:
         """
         tool = self._tools.get(name)
         if not tool:
+            monitor.record_execution(name, 0.0, success=False, error=f"Tool '{name}' not found")
             return f"Error: Tool '{name}' not found"
 
+        start_time = time.time()
         try:
             errors = tool.validate_params(params)
             if errors:
-                return f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors)
-            return await tool.execute(**params)
+                error_msg = f"Invalid parameters for tool '{name}': " + "; ".join(errors)
+                monitor.record_execution(name, time.time() - start_time, success=False, error=error_msg)
+                return f"Error: {error_msg}"
+            
+            result = await tool.execute(**params)
+            monitor.record_execution(name, time.time() - start_time, success=True)
+            return result
         except Exception as e:
+            monitor.record_execution(name, time.time() - start_time, success=False, error=str(e))
             return f"Error executing {name}: {str(e)}"
     
     @property
