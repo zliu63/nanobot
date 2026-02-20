@@ -62,8 +62,11 @@ class WebSearchTool(Tool):
         self.max_results = max_results
     
     async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str:
-        # Fallback to DuckDuckGo if no Brave key or Brave fails
-        use_fallback = not self.api_key
+                n = min(max(count or self.max_results, 1), 10)
+        
+        # Prioritize DuckDuckGo (free, no limits). Try Brave only if key present and prefer it.
+        use_brave = bool(self.api_key)
+        use_fallback = not use_brave  # DDG first unless Brave key
         
         if not use_fallback:
             try:
@@ -103,7 +106,7 @@ class WebSearchTool(Tool):
                 lines.append(f"📝 Summary: {abstract}\n\n")
             
             related = data.get('RelatedTopics', [])
-            for i, topic in enumerate(related[:min(n, 10)], 1):
+            for i, topic in enumerate(related[:n], 1):
                 if isinstance(topic, dict) and 'Text' in topic and 'FirstURL' in topic:
                     lines.append(f"{i}. {topic['Text']}\n   📎 {topic['FirstURL']}\n")
             
