@@ -179,11 +179,19 @@ class AgentLoop:
                     reasoning_content=response.reasoning_content,
                 )
 
-                for tool_call in response.tool_calls:
+                # Execute all tool calls in parallel for independent tools
+                async def _execute_tool(tc):
+                    args_str = json.dumps(tc.arguments, ensure_ascii=False)
+                    logger.info(f"Tool call: {tc.name}({args_str[:200]})")
+                    result = await self.tools.execute(tc.name, tc.arguments)
+                    return tc, result
+
+                tool_results = await asyncio.gather(
+                    *[_execute_tool(tc) for tc in response.tool_calls]
+                )
+
+                for tool_call, result in tool_results:
                     tools_used.append(tool_call.name)
-                    args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
-                    logger.info(f"Tool call: {tool_call.name}({args_str[:200]})")
-                    result = await self.tools.execute(tool_call.name, tool_call.arguments)
                     if isinstance(result, str) and result.startswith("Error"):
                         tool_failures += 1
                     messages = self.context.add_tool_result(
