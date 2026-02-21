@@ -270,6 +270,31 @@ class MemoryStore:
         with open(self.history_file, "a", encoding="utf-8") as f:
             f.write(entry.rstrip() + "\n\n")
 
+    def prune_old_memories(self) -> None:
+        \"\"\"hyp_010: Auto-archive old technical_fact (>48h create+access) and project_context (>72h create).\"\"\"
+        entries = self.load_memories()
+        now = datetime.now(timezone.utc)
+        pruned = 0
+        for e in entries:
+            if e.status == \"deleted\":
+                continue
+            try:
+                create_time = datetime.fromisoformat(e.created_at)
+                access_time = datetime.fromisoformat(e.last_accessed)
+                age_hours = (now - min(create_time, access_time)).total_seconds() / 3600
+                if e.category == \"technical_fact\" and age_hours > 48:
+                    e.status = \"archived\"
+                    pruned += 1
+                elif e.category == \"project_context\" and (now - create_time).total_seconds() / 3600 > 72:
+                    e.status = \"archived\"
+                    pruned += 1
+            except ValueError:
+                pass  # Invalid timestamps skip
+        if pruned > 0:
+            self.save_memories(entries)
+            self._rebuild_memory_md(entries)
+            logger.info(f\"Pruned {pruned} old memories (active now: {len(self.get_active_memories())})\")
+
     def get_memory_context(self) -> str:
         """Build the memory section for the system prompt.
 
