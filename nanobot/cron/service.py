@@ -341,6 +341,12 @@ class CronService:
                 return True
         return False
     
+    def get_due_proactive(self) -> list['CronJob']:
+        """Get due proactive jobs (cap 3)."""
+        now_ms = _now_ms()
+        due = [j for j in self.list_jobs() if j.enabled and j.state.next_run_at_ms and now_ms >= j.state.next_run_at_ms]
+        return due[:3]
+    
     def status(self) -> dict:
         """Get service status."""
         store = self._load_store()

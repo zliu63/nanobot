@@ -85,6 +85,7 @@ class AgentLoop:
             restrict_to_workspace=restrict_to_workspace,
         )
         
+        self.tick_counter = 0
         self._running = False
         self._register_default_tools()
         self._audit_engine = SelfAuditEngine(workspace)
@@ -229,6 +230,9 @@ class AgentLoop:
                         content=f"Sorry, I encountered an error: {str(e)}"
                     ))
             except asyncio.TimeoutError:
+                self.tick_counter += 1
+                if self.tick_counter % 300 == 0 and self.cron_service:  # ~5min
+                    await self._proactive_tick()
                 continue
     
     def stop(self) -> None:
@@ -329,6 +333,24 @@ class AgentLoop:
             content=final_content,
             metadata=msg.metadata or {},  # Pass through for channel-specific needs (e.g. Slack thread_ts)
         )
+    
+    async def _proactive_tick(self):
+        """P3 Proactivity: Inject due cron jobs as system messages."""
+        try:
+            due_jobs = self.cron_service.get_due_proactive()
+            for job in due_jobs:
+                content = job.payload.message
+                sys_msg = InboundMessage(
+                    channel="system",
+                    sender_id="heartbeat",
+                    chat_id=f"proactive:{job.id}",
+                    content=content
+                )
+                asyncio.create_task(self._process_message(sys_msg))
+            if due_jobs:
+                logger.info(f"Proactive tick: injected {len(due_jobs)} due jobs")
+        except Exception as e:
+            logger.warning(f"Proactive tick failed: {e}")
     
     async def _process_system_message(self, msg: InboundMessage) -> OutboundMessage | None:
         """
