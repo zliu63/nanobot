@@ -8,12 +8,14 @@ Three-tier architecture:
 
 import json
 import math
+import shutil
 import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
 from nanobot.utils.helpers import ensure_dir
 
 
@@ -273,8 +275,8 @@ class MemoryStore:
             f.write(entry.rstrip() + "\n\n")
 
     def prune_old_memories(self) -> None:
-        """hyp_010: Auto-archive old technical_fact (>48h create+access) and project_context (>72h create).
-        P0: Hard cap active memories + file size."""
+        """Auto-archive old technical_fact (>48h) and project_context (>72h).
+        Also enforces hard cap on active memories and file size."""
         entries = self.load_memories()
         now = datetime.now(timezone.utc)
         pruned = 0
@@ -308,7 +310,7 @@ class MemoryStore:
         # Enforce file size
         self._enforce_file_size()
         
-        print(f"Pruned {pruned} old memories (active now: {len(self.get_active_memories())})")  # No logger dep
+        logger.info(f"Pruned {pruned} old memories (active now: {len(self.get_active_memories())})")
 
     def _enforce_file_size(self) -> None:
         """Enforce max file size by truncating oldest 20% if exceeded."""
@@ -321,8 +323,8 @@ class MemoryStore:
                 from datetime import datetime
                 archive_name = f"memories_archive_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
                 archive_path = self.memory_dir / archive_name
-                self.memories_jsonl.copy(archive_path)
-                print(f"Memory file capped at {self.MAX_FILE_MB}MB, archived to {archive_name}")
+                shutil.copy2(self.memories_jsonl, archive_path)
+                logger.warning(f"Memory file capped at {self.MAX_FILE_MB}MB, archived to {archive_name}")
                 
                 # Truncate to last 80%
                 with open(self.memories_jsonl, 'r', encoding='utf-8') as f:
@@ -331,7 +333,7 @@ class MemoryStore:
                 with open(self.memories_jsonl, 'w', encoding='utf-8') as f:
                     f.writelines(keep)
         except Exception as e:
-            print(f"File size enforcement failed: {e}")
+            logger.error(f"File size enforcement failed: {e}")
     
     def get_memory_context(self) -> str:
         """Build the memory section for the system prompt.

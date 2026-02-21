@@ -13,10 +13,7 @@ from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.providers.base import LLMProvider
 from nanobot.agent.context import ContextBuilder
-from nanobot.agent.tools.registry import ToolRegistry
-from nanobot.agent.tools.filesystem import ReadFileTool, WriteFileTool, EditFileTool, ListDirTool
-from nanobot.agent.tools.shell import ExecTool
-from nanobot.agent.tools.web import WebSearchTool, WebFetchTool
+from nanobot.agent.tools.defaults import build_default_tools
 from nanobot.agent.tools.message import MessageTool
 from nanobot.agent.tools.spawn import SpawnTool
 from nanobot.agent.tools.cron import CronTool
@@ -72,7 +69,6 @@ class AgentLoop:
 
         self.context = ContextBuilder(workspace)
         self.sessions = session_manager or SessionManager(workspace)
-        self.tools = ToolRegistry()
         self.subagents = SubagentManager(
             provider=provider,
             workspace=workspace,
@@ -87,40 +83,17 @@ class AgentLoop:
         
         self.tick_counter = 0
         self._running = False
-        self._register_default_tools()
-        self._audit_engine = SelfAuditEngine(workspace)
-    
-    def _register_default_tools(self) -> None:
-        """Register the default set of tools."""
-        # File tools (restrict to workspace if configured)
-        allowed_dir = self.workspace if self.restrict_to_workspace else None
-        self.tools.register(ReadFileTool(allowed_dir=allowed_dir))
-        self.tools.register(WriteFileTool(allowed_dir=allowed_dir))
-        self.tools.register(EditFileTool(allowed_dir=allowed_dir))
-        self.tools.register(ListDirTool(allowed_dir=allowed_dir))
-        
-        # Shell tool
-        self.tools.register(ExecTool(
-            working_dir=str(self.workspace),
-            timeout=self.exec_config.timeout,
+        self.tools = build_default_tools(
+            workspace=self.workspace,
+            exec_config=self.exec_config,
             restrict_to_workspace=self.restrict_to_workspace,
-        ))
-        
-        # Web tools
-        self.tools.register(WebSearchTool(api_key=self.brave_api_key))
-        self.tools.register(WebFetchTool())
-        
-        # Message tool
-        message_tool = MessageTool(send_callback=self.bus.publish_outbound)
-        self.tools.register(message_tool)
-        
-        # Spawn tool (for subagents)
-        spawn_tool = SpawnTool(manager=self.subagents)
-        self.tools.register(spawn_tool)
-        
-        # Cron tool (for scheduling)
-        if self.cron_service:
-            self.tools.register(CronTool(self.cron_service))
+            brave_api_key=self.brave_api_key,
+            include_agent_tools=True,
+            bus=self.bus,
+            subagents=self.subagents,
+            cron_service=self.cron_service,
+        )
+        self._audit_engine = SelfAuditEngine(workspace)
     
     def _set_tool_context(self, channel: str, chat_id: str) -> None:
         """Update context for all tools that need routing info."""
@@ -285,7 +258,7 @@ class AgentLoop:
         if len(session.messages) > self.memory_window:
             asyncio.create_task(self._consolidate_memory(session))
 
-        # hyp_010: Prune old memories on interaction
+        # Prune old memories on each interaction
         memory = MemoryStore(self.workspace)
         memory.prune_old_memories()
 

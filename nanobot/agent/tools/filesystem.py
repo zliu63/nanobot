@@ -3,6 +3,8 @@
 from pathlib import Path
 from typing import Any
 
+import aiofiles
+
 from nanobot.agent.tools.base import Tool
 
 

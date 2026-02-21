@@ -278,6 +278,29 @@ This file stores important information that should persist across sessions.
     skills_dir.mkdir(exist_ok=True)
 
 
+def _make_cron_callback(agent, bus):
+    """Create the on_cron_job callback for a CronService."""
+    from nanobot.cron.types import CronJob
+
+    async def on_cron_job(job: CronJob) -> str | None:
+        response = await agent.process_direct(
+            job.payload.message,
+            session_key=f"cron:{job.id}",
+            channel=job.payload.channel or "cli",
+            chat_id=job.payload.to or "direct",
+        )
+        if job.payload.deliver and job.payload.to:
+            from nanobot.bus.events import OutboundMessage
+            await bus.publish_outbound(OutboundMessage(
+                channel=job.payload.channel or "cli",
+                chat_id=job.payload.to,
+                content=response or ""
+            ))
+        return response
+
+    return on_cron_job
+
+
 def _make_provider(config):
     """Create LiteLLMProvider from config. Exits if no API key found."""
     from nanobot.providers.litellm_provider import LiteLLMProvider
@@ -313,13 +336,12 @@ def gateway(
     from nanobot.channels.manager import ChannelManager
     from nanobot.session.manager import SessionManager
     from nanobot.cron.service import CronService
-    from nanobot.cron.types import CronJob
     from nanobot.heartbeat.service import HeartbeatService
-    
+
     if verbose:
         import logging
         logging.basicConfig(level=logging.DEBUG)
-    
+
     console.print(f"{__logo__} Starting nanobot gateway on port {port}...")
     
     config = load_config()
@@ -349,23 +371,7 @@ def gateway(
     )
     
     # Set cron callback (needs agent)
-    async def on_cron_job(job: CronJob) -> str | None:
-        """Execute a cron job through the agent."""
-        response = await agent.process_direct(
-            job.payload.message,
-            session_key=f"cron:{job.id}",
-            channel=job.payload.channel or "cli",
-            chat_id=job.payload.to or "direct",
-        )
-        if job.payload.deliver and job.payload.to:
-            from nanobot.bus.events import OutboundMessage
-            await bus.publish_outbound(OutboundMessage(
-                channel=job.payload.channel or "cli",
-                chat_id=job.payload.to,
-                content=response or ""
-            ))
-        return response
-    cron.on_job = on_cron_job
+    cron.on_job = _make_cron_callback(agent, bus)
     
     # Create heartbeat service
     async def on_heartbeat(prompt: str) -> str:
@@ -423,7 +429,6 @@ def serve(
     from nanobot.agent.loop import AgentLoop
     from nanobot.session.manager import SessionManager
     from nanobot.cron.service import CronService
-    from nanobot.cron.types import CronJob
     from nanobot.heartbeat.service import HeartbeatService
 
     if verbose:
@@ -456,22 +461,7 @@ def serve(
         session_manager=session_manager,
     )
 
-    async def on_cron_job(job: CronJob) -> str | None:
-        response = await agent.process_direct(
-            job.payload.message,
-            session_key=f"cron:{job.id}",
-            channel=job.payload.channel or "cli",
-            chat_id=job.payload.to or "direct",
-        )
-        if job.payload.deliver and job.payload.to:
-            from nanobot.bus.events import OutboundMessage
-            await bus.publish_outbound(OutboundMessage(
-                channel=job.payload.channel or "cli",
-                chat_id=job.payload.to,
-                content=response or ""
-            ))
-        return response
-    cron.on_job = on_cron_job
+    cron.on_job = _make_cron_callback(agent, bus)
 
     async def on_heartbeat(prompt: str) -> str:
         return await agent.process_direct(prompt, session_key="heartbeat")
