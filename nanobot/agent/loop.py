@@ -313,10 +313,16 @@ class AgentLoop:
             due_jobs = self.cron_service.get_due_proactive()
             for job in due_jobs:
                 content = job.payload.message
+                # Use the job's delivery channel/chat_id if specified,
+                # so the response reaches the correct destination (e.g. Telegram)
+                if job.payload.deliver and job.payload.channel:
+                    chat_id = f"{job.payload.channel}:{job.payload.to or ''}"
+                else:
+                    chat_id = f"proactive:{job.id}"
                 sys_msg = InboundMessage(
                     channel="system",
                     sender_id="heartbeat",
-                    chat_id=f"proactive:{job.id}",
+                    chat_id=chat_id,
                     content=content
                 )
                 asyncio.create_task(self._process_message(sys_msg))
