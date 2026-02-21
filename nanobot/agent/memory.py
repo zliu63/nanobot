@@ -105,6 +105,8 @@ class MemoryEntry:
 
 
 class MemoryStore:
+    MAX_ACTIVE = 500
+    MAX_FILE_MB = 10
     """
     Manages all persistent memory:
 
@@ -271,7 +273,8 @@ class MemoryStore:
             f.write(entry.rstrip() + "\n\n")
 
     def prune_old_memories(self) -> None:
-        """hyp_010: Auto-archive old technical_fact (>48h create+access) and project_context (>72h create)."""
+        """hyp_010: Auto-archive old technical_fact (>48h create+access) and project_context (>72h create).
+        P0: Hard cap active memories + file size."""
         entries = self.load_memories()
         now = datetime.now(timezone.utc)
         pruned = 0
@@ -290,11 +293,46 @@ class MemoryStore:
                     pruned += 1
             except ValueError:
                 pass  # Invalid timestamps skip
-        if pruned > 0:
+        
+        # Hard cap: LRU evict active (strength >0.5)
+        active = [e for e in entries if e.status != "deleted" and e.compute_strength() > 0.5]
+        if len(active) > self.MAX_ACTIVE:
+            active.sort(key=lambda e: e.last_accessed or e.created_at)
+            excess = active[:-self.MAX_ACTIVE]
+            for e in excess:
+                e.status = "archived"
+                pruned += 1
             self.save_memories(entries)
             self._rebuild_memory_md(entries)
-            logger.info(f"Pruned {pruned} old memories (active now: {len(self.get_active_memories())})")
+        
+        # Enforce file size
+        self._enforce_file_size()
+        
+        print(f"Pruned {pruned} old memories (active now: {len(self.get_active_memories())})")  # No logger dep
 
+    def _enforce_file_size(self) -> None:
+        """Enforce max file size by truncating oldest 20% if exceeded."""
+        if not self.memories_jsonl.exists():
+            return
+        try:
+            size_mb = self.memories_jsonl.stat().st_size / (1024 ** 2)
+            if size_mb > self.MAX_FILE_MB:
+                # Backup first
+                from datetime import datetime
+                archive_name = f"memories_archive_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
+                archive_path = self.memory_dir / archive_name
+                self.memories_jsonl.copy(archive_path)
+                print(f"Memory file capped at {self.MAX_FILE_MB}MB, archived to {archive_name}")
+                
+                # Truncate to last 80%
+                with open(self.memories_jsonl, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                keep = lines[-int(len(lines) * 0.8):]
+                with open(self.memories_jsonl, 'w', encoding='utf-8') as f:
+                    f.writelines(keep)
+        except Exception as e:
+            print(f"File size enforcement failed: {e}")
+    
     def get_memory_context(self) -> str:
         """Build the memory section for the system prompt.
 

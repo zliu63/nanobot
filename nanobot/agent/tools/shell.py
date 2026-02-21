@@ -19,7 +19,9 @@ class ExecTool(Tool):
         deny_patterns: list[str] | None = None,
         allow_patterns: list[str] | None = None,
         restrict_to_workspace: bool = False,
+        sandbox: str = "restricted",  # "docker" | "restricted" | "none"
     ):
+        self.sandbox = sandbox
         self.timeout = timeout
         self.working_dir = working_dir
         self.deny_patterns = deny_patterns or [
@@ -31,6 +33,8 @@ class ExecTool(Tool):
             r">\s*/dev/sd",                  # write to disk
             r"\b(shutdown|reboot|poweroff)\b",  # system power
             r":\(\)\s*\{.*\};\s*:",          # fork bomb
+            r"\b(nslookup|curl|wget|ping|nc|telnet)\b",  # network
+            r"\bsudo\b",                     # privilege escalation
         ]
         self.allow_patterns = allow_patterns or []
         self.restrict_to_workspace = restrict_to_workspace
@@ -62,6 +66,13 @@ class ExecTool(Tool):
     
     async def execute(self, command: str, working_dir: str | None = None, **kwargs: Any) -> str:
         cwd = working_dir or self.working_dir or os.getcwd()
+        
+        if self.sandbox == "docker":
+            import shlex
+            docker_cmd = f"docker run --rm -v {shlex.quote(cwd)}:/ws -w /ws alpine sh -c {shlex.quote(command)}"
+            command = docker_cmd  # Override command to docker
+            cwd = None  # Docker handles cwd
+        
         guard_error = self._guard_command(command, cwd)
         if guard_error:
             return guard_error

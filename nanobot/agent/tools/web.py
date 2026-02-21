@@ -44,7 +44,7 @@ def _validate_url(url: str) -> tuple[bool, str]:
 
 
 class WebSearchTool(Tool):
-    """Search the web using Brave Search API."""
+    """Search the web using Brave Search API or DuckDuckGo."""
     
     name = "web_search"
     description = "Search the web. Returns titles, URLs, and snippets."
@@ -61,10 +61,37 @@ class WebSearchTool(Tool):
         self.api_key = api_key or os.environ.get("BRAVE_API_KEY", "")
         self.max_results = max_results
     
+    async def _ddg_search(self, query: str, n: int) -> str:
+        """DuckDuckGo search implementation."""
+        try:
+            q_encoded = quote(query)
+            ddg_url = f"https://api.duckduckgo.com/?q={q_encoded}&format=json&no_html=1&skip_disambig=1"
+            async with httpx.AsyncClient() as client:
+                r = await client.get(ddg_url, timeout=10.0)
+                r.raise_for_status()
+            
+            data = r.json()
+            lines = [f"DDG Results for: {query}\n"]
+            
+            if abstract := data.get('AbstractText'):
+                lines.append(f"📝 Summary: {abstract}\n\n")
+            
+            related = data.get('RelatedTopics', [])
+            for i, topic in enumerate(related[:n], 1):
+                if isinstance(topic, dict) and 'Text' in topic and 'FirstURL' in topic:
+                    lines.append(f"{i}. {topic['Text']}\n   📎 {topic['FirstURL']}\n")
+            
+            if len(lines) == 1:
+                return f"No results for: {query}"
+            
+            return "\n".join(lines)
+        except Exception as e:
+            return f"DDG search error: {e}"
+    
     async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str:
         n = min(max(count or self.max_results, 1), 10)
         
-        # Prioritize DuckDuckGo (free, no API limits). Brave optional if key available.
+        # Try Brave if API key available
         if self.api_key:
             try:
                 async with httpx.AsyncClient() as client:
@@ -87,57 +114,8 @@ class WebSearchTool(Tool):
             except Exception as brave_e:
                 print(f"Brave search failed: {brave_e}")
         
-        # DuckDuckGo (primary, always available)
-        try:
-            q_encoded = quote(query)
-            ddg_url = f"https://api.duckduckgo.com/?q={q_encoded}&format=json&no_html=1&skip_disambig=1"
-            async with httpx.AsyncClient() as client:
-                r = await client.get(ddg_url, timeout=10.0)
-                r.raise_for_status()
-            
-            data = r.json()
-            lines = [f"DDG Results for: {query}\n"]
-            
-            if abstract := data.get('AbstractText'):
-                lines.append(f"📝 Summary: {abstract}\n\n")
-            
-            related = data.get('RelatedTopics', [])
-            for i, topic in enumerate(related[:n], 1):
-                if isinstance(topic, dict) and 'Text' in topic and 'FirstURL' in topic:
-                    lines.append(f"{i}. {topic['Text']}\n   📎 {topic['FirstURL']}\n")
-            
-            if len(lines) == 1:  # No results
-                return f"No results for: {query}"
-            
-            return "\n".join(lines)
-        except Exception as e:
-            return f"Search error: {e}"
-        
-        # DuckDuckGo fallback (always available, no key needed)
-        try:
-            q_encoded = quote(query)
-            ddg_url = f"https://api.duckduckgo.com/?q={q_encoded}&format=json&no_html=1&skip_disambig=1"
-            async with httpx.AsyncClient() as client:
-                r = await client.get(ddg_url, timeout=10.0)
-                r.raise_for_status()
-            
-            data = r.json()
-            lines = [f"DDG Results for: {query}\n"]
-            
-            if abstract := data.get('AbstractText'):
-                lines.append(f"📝 Summary: {abstract}\n\n")
-            
-            related = data.get('RelatedTopics', [])
-            for i, topic in enumerate(related[:n], 1):
-                if isinstance(topic, dict) and 'Text' in topic and 'FirstURL' in topic:
-                    lines.append(f"{i}. {topic['Text']}\n   📎 {topic['FirstURL']}\n")
-            
-            if not lines[1:]:  # No results
-                return f"No results for: {query}"
-            
-            return "\n".join(lines)
-        except Exception as e:
-            return f"Search error (both Brave & DDG failed): {e}"
+        # Fallback to DDG
+        return await self._ddg_search(query, n)
 
 
 class WebFetchTool(Tool):
