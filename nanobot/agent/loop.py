@@ -279,6 +279,10 @@ class AgentLoop:
         if len(session.messages) > self.memory_window:
             asyncio.create_task(self._consolidate_memory(session))
 
+        # hyp_010: Prune old memories on interaction
+        memory = MemoryStore(self.workspace)
+        memory.prune_old_memories()
+
         self._set_tool_context(msg.channel, msg.chat_id)
         initial_messages = self.context.build_messages(
             history=session.get_history(max_messages=self.memory_window),
