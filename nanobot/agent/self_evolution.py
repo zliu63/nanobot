@@ -239,6 +239,7 @@ Analyse the metrics above and respond with ONLY valid JSON with these keys:
 
 "hypotheses": list of objects, each with:
   - "id": string (e.g. "hyp_001")
+  - "priority_score": float (0-10, higher = more important)
   - "statement": string — if we change X, metric Y should improve
   - "requires_code_change": boolean — true if this needs editing Python source files
   - "target_file": string (if requires_code_change) — e.g. "nanobot/agent/loop.py"
@@ -299,7 +300,7 @@ Rules:
         baseline_metrics: dict,
         audit_number: int,
     ) -> None:
-        """Write the top code-change hypothesis to experiments/pending-evolution.json.
+        """Write the top code-change hypothesis to experiments/pending-evolution.json (sorted by priority_score).
 
         The standby instance's heartbeat will check this file and implement the change
         using the evolve skill.  Only one pending evolution at a time.
@@ -316,7 +317,11 @@ Rules:
             except Exception:
                 pass
 
-        # Take the highest-priority hypothesis (first in list)
+        if not code_hypotheses:
+            return
+
+        # Sort by priority_score desc, take top
+        code_hypotheses.sort(key=lambda h: h.get('priority_score', 0), reverse=True)
         hyp = code_hypotheses[0]
 
         pending = {
@@ -324,6 +329,7 @@ Rules:
             "created_at": datetime.now(timezone.utc).isoformat(),
             "audit_number": audit_number,
             "hypothesis_id": hyp.get("id", f"hyp_{audit_number}_001"),
+            "priority_score": hyp.get("priority_score", 0),
             "statement": hyp.get("statement", ""),
             "target_file": hyp.get("target_file", ""),
             "change_description": hyp.get("change_description", ""),
@@ -337,7 +343,7 @@ Rules:
             },
         }
         pending_file.write_text(json.dumps(pending, indent=2, ensure_ascii=False), encoding="utf-8")
-        logger.info(f"Self-audit: wrote pending evolution → {hyp.get('id')} ({hyp.get('target_file')})")
+        logger.info(f"Self-audit: wrote pending evolution → {hyp.get('id')} (score={hyp.get('priority_score')}) ({hyp.get('target_file')})")
 
     # ──────────────────────────────────────────────────────────────────────────
     # Persistence helpers
