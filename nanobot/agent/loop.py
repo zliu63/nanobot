@@ -151,7 +151,8 @@ class AgentLoop:
         tools_used: list[str] = []
         tool_failures = 0
 
-        while iteration < self.max_iterations:
+        max_iters = min(5 + len(initial_messages)//2, self.max_iterations)
+        while iteration < max_iters:
             iteration += 1
 
             response = await self.provider.chat(
@@ -200,7 +201,8 @@ class AgentLoop:
                 messages.append({"role": "user", "content": "Reflect on the results and decide next steps."})
             else:
                 final_content = response.content
-                break
+                if final_content and len(final_content) > 50:
+                    break
 
         return final_content, tools_used, tool_failures, iteration
 

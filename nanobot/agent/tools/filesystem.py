@@ -49,7 +49,8 @@ class ReadFileTool(Tool):
             if not file_path.is_file():
                 return f"Error: Not a file: {path}"
             
-            content = file_path.read_text(encoding="utf-8")
+            async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+                content = await f.read()
             return content
         except PermissionError as e:
             return f"Error: {e}"
@@ -92,7 +93,8 @@ class WriteFileTool(Tool):
         try:
             file_path = _resolve_path(path, self._allowed_dir)
             file_path.parent.mkdir(parents=True, exist_ok=True)
-            file_path.write_text(content, encoding="utf-8")
+            async with aiofiles.open(file_path, 'w', encoding='utf-8') as f:
+                await f.write(content)
             return f"Successfully wrote {len(content)} bytes to {path}"
         except PermissionError as e:
             return f"Error: {e}"
@@ -141,7 +143,8 @@ class EditFileTool(Tool):
             if not file_path.exists():
                 return f"Error: File not found: {path}"
             
-            content = file_path.read_text(encoding="utf-8")
+            async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+                content = await f.read()
             
             if old_text not in content:
                 return f"Error: old_text not found in file. Make sure it matches exactly."
@@ -152,7 +155,8 @@ class EditFileTool(Tool):
                 return f"Warning: old_text appears {count} times. Please provide more context to make it unique."
             
             new_content = content.replace(old_text, new_text, 1)
-            file_path.write_text(new_content, encoding="utf-8")
+            async with aiofiles.open(file_path, 'w', encoding='utf-8') as f:
+                await f.write(new_content)
             
             return f"Successfully edited {path}"
         except PermissionError as e:
