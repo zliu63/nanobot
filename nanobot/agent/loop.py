@@ -130,9 +130,10 @@ class AgentLoop:
         while iteration < max_iters:
             iteration += 1
 
+            use_tools = None if iteration == max_iters else self.tools.get_definitions()
             response = await self.provider.chat(
                 messages=messages,
-                tools=self.tools.get_definitions(),
+                tools=use_tools,
                 model=self.model,
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
@@ -173,11 +174,13 @@ class AgentLoop:
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
-                messages.append({"role": "user", "content": "Reflect on the results and decide next steps."})
+                if iteration >= max_iters - 1:
+                    messages.append({"role": "user", "content": "You've used all available tool calls. Now give your final answer to the user based on what you've learned. Do NOT call any more tools."})
+                else:
+                    messages.append({"role": "user", "content": "Reflect on the results and decide next steps."})
             else:
                 final_content = response.content
-                if final_content and len(final_content) > 50:
-                    break
+                break
 
         return final_content, tools_used, tool_failures, iteration
 
