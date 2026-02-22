@@ -13,6 +13,8 @@ Phase 1 responsibilities:
 import json
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
+
+from nanobot.agent.json_utils import parse_json_response
 from pathlib import Path
 from typing import Any
 
@@ -91,9 +93,8 @@ class SelfAuditEngine:
                 temperature=0.3,
             )
             text = (response.content or "").strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-            result: dict = json.loads(text)
+            logger.debug(f"Self-audit raw LLM response:\n{text}")
+            result: dict = parse_json_response(text)
         except Exception as e:
             logger.error(f"Self-audit LLM call failed: {e}")
             return None

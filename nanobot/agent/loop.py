@@ -18,6 +18,7 @@ from nanobot.agent.tools.message import MessageTool
 from nanobot.agent.tools.spawn import SpawnTool
 from nanobot.agent.tools.cron import CronTool
 from nanobot.agent.memory import MemoryStore
+from nanobot.agent.json_utils import parse_json_response
 from nanobot.agent.self_evolution import SelfAuditEngine
 from nanobot.agent.subagent import SubagentManager
 from nanobot.utils.helpers import ensure_dir
@@ -510,10 +511,8 @@ Example: {{"add": [{{"content": "User is migrating a Flask app to FastAPI", "cat
             )
 
             text = (response.content or "").strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-
-            ops: dict = json.loads(text)
+            logger.debug(f"Memory reflection raw LLM response:\n{text}")
+            ops: dict = parse_json_response(text)
 
             added = updated = deleted = 0
             for item in ops.get("add", []):
@@ -599,9 +598,8 @@ Respond with ONLY valid JSON, no markdown fences."""
                 model=self.model,
             )
             text = (response.content or "").strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-            result = json.loads(text)
+            logger.debug(f"Memory consolidation raw LLM response:\n{text}")
+            result = parse_json_response(text)
 
             if entry := result.get("history_entry"):
                 memory.append_history(entry)
