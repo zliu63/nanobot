@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import shutil
 import signal
 from pathlib import Path
 import select
@@ -198,85 +199,20 @@ def onboard():
 
 
 
+def _get_template_workspace() -> Path:
+    """Get the path to the template workspace bundled with nanobot."""
+    return Path(__file__).resolve().parent.parent.parent / "workspace"
+
+
 def _create_workspace_templates(workspace: Path):
-    """Create default workspace template files."""
-    templates = {
-        "AGENTS.md": """# Agent Instructions
+    """Copy template workspace into the user's runtime workspace."""
+    template_dir = _get_template_workspace()
+    if not template_dir.exists():
+        console.print("[yellow]⚠ Template workspace not found, skipping bootstrap files[/yellow]")
+        return
 
-You are a helpful AI assistant. Be concise, accurate, and friendly.
-
-## Guidelines
-
-- Always explain what you're doing before taking actions
-- Ask for clarification when the request is ambiguous
-- Use tools to help accomplish tasks
-- Remember important information in memory/MEMORY.md; past events are logged in memory/HISTORY.md
-""",
-        "SOUL.md": """# Soul
-
-I am nanobot, a lightweight AI assistant.
-
-## Personality
-
-- Helpful and friendly
-- Concise and to the point
-- Curious and eager to learn
-
-## Values
-
-- Accuracy over speed
-- User privacy and safety
-- Transparency in actions
-""",
-        "USER.md": """# User
-
-Information about the user goes here.
-
-## Preferences
-
-- Communication style: (casual/formal)
-- Timezone: (your timezone)
-- Language: (your preferred language)
-""",
-    }
-    
-    for filename, content in templates.items():
-        file_path = workspace / filename
-        if not file_path.exists():
-            file_path.write_text(content, encoding="utf-8")
-            console.print(f"  [dim]Created {filename}[/dim]")
-    
-    # Create memory directory and MEMORY.md
-    memory_dir = workspace / "memory"
-    memory_dir.mkdir(exist_ok=True)
-    memory_file = memory_dir / "MEMORY.md"
-    if not memory_file.exists():
-        memory_file.write_text("""# Long-term Memory
-
-This file stores important information that should persist across sessions.
-
-## User Information
-
-(Important facts about the user)
-
-## Preferences
-
-(User preferences learned over time)
-
-## Important Notes
-
-(Things to remember)
-""", encoding="utf-8")
-        console.print("  [dim]Created memory/MEMORY.md[/dim]")
-    
-    history_file = memory_dir / "HISTORY.md"
-    if not history_file.exists():
-        history_file.write_text("", encoding="utf-8")
-        console.print("  [dim]Created memory/HISTORY.md[/dim]")
-
-    # Create skills directory for custom user skills
-    skills_dir = workspace / "skills"
-    skills_dir.mkdir(exist_ok=True)
+    shutil.copytree(template_dir, workspace, dirs_exist_ok=True)
+    console.print(f"[green]✓[/green] Copied workspace templates to {workspace}")
 
 
 def _make_provider(config: Config):
@@ -337,10 +273,14 @@ def gateway(
     from nanobot.cron.types import CronJob
     from nanobot.heartbeat.service import HeartbeatService
     
+    from nanobot.utils.helpers import setup_logging
+    log_file = setup_logging()
+    console.print(f"[dim]Logs: {log_file}[/dim]")
+
     if verbose:
         import logging
         logging.basicConfig(level=logging.DEBUG)
-    
+
     console.print(f"{__logo__} Starting nanobot gateway on port {port}...")
     
     config = load_config()
@@ -450,6 +390,10 @@ def serve(
     from nanobot.cron.types import CronJob
     from nanobot.heartbeat.service import HeartbeatService
 
+    from nanobot.utils.helpers import setup_logging
+    log_file = setup_logging()
+    console.print(f"[dim]Logs: {log_file}[/dim]")
+
     if verbose:
         import logging
         logging.basicConfig(level=logging.DEBUG)
@@ -557,10 +501,12 @@ def agent(
     from nanobot.bus.queue import MessageBus
     from nanobot.agent.loop import AgentLoop
     from nanobot.cron.service import CronService
+    from nanobot.utils.helpers import setup_logging
     from loguru import logger
-    
+
     config = load_config()
-    
+    setup_logging(config.workspace_path)
+
     bus = MessageBus()
     provider = _make_provider(config)
 

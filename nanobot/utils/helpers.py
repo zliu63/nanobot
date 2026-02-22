@@ -64,6 +64,33 @@ def safe_filename(name: str) -> str:
     return name.strip()
 
 
+def setup_logging(workspace: Path | None = None) -> Path:
+    """Configure loguru to write logs to workspace/logs/.
+
+    Returns the log file path.
+    """
+    from loguru import logger
+    import sys
+
+    ws = workspace or get_workspace_path()
+    log_dir = ensure_dir(ws / "logs")
+    log_file = log_dir / "nanobot.log"
+
+    # Remove default stderr sink, re-add with WARNING level
+    logger.remove()
+    logger.add(sys.stderr, level="WARNING")
+
+    # File sink: rotate daily, keep 7 days
+    logger.add(
+        str(log_file),
+        rotation="1 day",
+        retention="7 days",
+        level="DEBUG",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level:<8} | {name}:{function}:{line} | {message}",
+    )
+    return log_file
+
+
 def parse_session_key(key: str) -> tuple[str, str]:
     """
     Parse a session key into channel and chat_id.
