@@ -577,9 +577,11 @@ Example: {{"add": [{{"content": "User is migrating a Flask app to FastAPI", "cat
 
         prompt = f"""You are a memory consolidation agent. Process this conversation and return a JSON object with exactly two keys:
 
-1. "history_entry": A paragraph (2-5 sentences) summarizing the key events/decisions/topics. Start with a timestamp like [YYYY-MM-DD HH:MM]. Include enough detail to be useful when found by grep search later.
+1. "history_entry": A concise paragraph (2-4 sentences, max 300 chars) summarizing the key events/decisions. Start with [YYYY-MM-DD HH:MM].
 
-2. "memory_update": The updated long-term memory content. Add any new facts: user location, preferences, personal info, habits, project context, technical decisions, tools/services used. If nothing new, return the existing content unchanged.
+2. "memory_update": The updated long-term memory content. Only add genuinely new facts. If nothing new, return the existing content UNCHANGED (copy it exactly). Keep total memory_update under 3000 characters — if it would exceed that, summarize older entries to make room.
+
+IMPORTANT: Keep your response SHORT. Do not repeat or expand existing memory entries unnecessarily.
 
 ## Current Long-term Memory
 {current_memory or "(empty)"}

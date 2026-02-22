@@ -89,7 +89,7 @@ class SelfAuditEngine:
                     {"role": "user", "content": prompt},
                 ],
                 model=model,
-                max_tokens=2048,
+                max_tokens=4096,
                 temperature=0.3,
             )
             text = (response.content or "").strip()
@@ -256,10 +256,13 @@ Analyse the metrics above and respond with ONLY valid JSON with these keys:
 "observations": string — anything else worth noting for the next audit
 
 Rules:
+- Be CONCISE. Keep diagnosis under 200 words. Keep each hypothesis statement under 50 words.
+- Max 3 hypotheses. Max 2 immediate_actions.
 - Be specific and honest. If the data is too sparse to diagnose, say so.
 - Keep hypotheses small and testable (one thing at a time).
 - Only mark requires_code_change=true if the improvement genuinely needs code edits.
-- Return {{}} for any key if nothing applicable."""
+- Return {{}} for any key if nothing applicable.
+- Your TOTAL response must be valid JSON under 2000 tokens. Brevity is critical."""
 
     # ──────────────────────────────────────────────────────────────────────────
     # Action execution
