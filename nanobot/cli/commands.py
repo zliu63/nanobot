@@ -471,7 +471,7 @@ def serve(
     heartbeat = HeartbeatService(
         workspace=config.workspace_path,
         on_heartbeat=on_heartbeat,
-        interval_s=30 * 60,
+        interval_s=5 * 60,
         enabled=True,
     )
 
