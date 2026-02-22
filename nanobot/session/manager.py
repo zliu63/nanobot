@@ -1,7 +1,6 @@
 """Session management for conversation history."""
 
 import json
-import shutil
 from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -70,7 +69,6 @@ class SessionManager:
     def __init__(self, workspace: Path):
         self.workspace = workspace
         self.sessions_dir = ensure_dir(self.workspace / "sessions")
-        self.legacy_sessions_dir = Path.home() / ".nanobot" / "sessions"
         self._cache: dict[str, Session] = {}
     
     def _get_session_path(self, key: str) -> Path:
@@ -78,11 +76,6 @@ class SessionManager:
         safe_key = safe_filename(key.replace(":", "_"))
         return self.sessions_dir / f"{safe_key}.jsonl"
 
-    def _get_legacy_session_path(self, key: str) -> Path:
-        """Legacy global session path (~/.nanobot/sessions/)."""
-        safe_key = safe_filename(key.replace(":", "_"))
-        return self.legacy_sessions_dir / f"{safe_key}.jsonl"
-    
     def get_or_create(self, key: str) -> Session:
         """
         Get an existing session or create a new one.
@@ -106,15 +99,6 @@ class SessionManager:
     def _load(self, key: str) -> Session | None:
         """Load a session from disk."""
         path = self._get_session_path(key)
-        if not path.exists():
-            legacy_path = self._get_legacy_session_path(key)
-            if legacy_path.exists():
-                try:
-                    shutil.move(str(legacy_path), str(path))
-                    logger.info("Migrated session {} from legacy path", key)
-                except Exception:
-                    logger.exception("Failed to migrate session {}", key)
-
         if not path.exists():
             return None
 
