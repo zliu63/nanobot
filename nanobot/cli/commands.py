@@ -426,10 +426,12 @@ def serve(
     from aiohttp import web as aioweb
     from nanobot.config.loader import load_config, get_data_dir
     from nanobot.bus.queue import MessageBus
+    from nanobot.bus.events import OutboundMessage
     from nanobot.agent.loop import AgentLoop
     from nanobot.session.manager import SessionManager
     from nanobot.cron.service import CronService
     from nanobot.heartbeat.service import HeartbeatService
+    from loguru import logger
 
     if verbose:
         import logging
@@ -473,6 +475,66 @@ def serve(
         enabled=True,
     )
 
+    # ------------------------------------------------------------------
+    # Unified outbound message delivery
+    # ------------------------------------------------------------------
+    # All outbound messages (user responses, cron, message tool, heartbeat)
+    # go through bus.publish_outbound() → dispatch_outbound() → subscriber
+    # → callback_url → orchestrator → Telegram/etc.
+    #
+    # The callback_url is provided by the orchestrator on each request.
+    # We remember the latest one so cron/heartbeat messages can also be
+    # delivered even when there's no active user request.
+    # ------------------------------------------------------------------
+    _latest_callback_url: dict[str, str] = {}  # channel:chat_id → callback_url
+
+    async def _outbound_via_callback(msg: OutboundMessage) -> None:
+        """Send an outbound message to the orchestrator via callback URL."""
+        import httpx as httpx_client
+        key = f"{msg.channel}:{msg.chat_id}"
+        callback_url = _latest_callback_url.get(key)
+        if not callback_url:
+            logger.warning(f"No callback_url for {key}, dropping outbound message")
+            return
+        if not msg.content:
+            return
+        try:
+            async with httpx_client.AsyncClient(timeout=30) as c:
+                await c.post(callback_url, json={
+                    "chat_id": msg.chat_id,
+                    "content": msg.content,
+                })
+            logger.info(f"Outbound delivered to {key} via callback")
+        except Exception as e:
+            logger.error(f"Outbound delivery failed for {key}: {e}")
+
+    # Register a catch-all subscriber: any channel goes through callback
+    # We use subscribe_outbound for known channels, but since we don't know
+    # all channels upfront, we override dispatch_outbound behavior by
+    # subscribing to channels as we see them.
+    _subscribed_channels: set[str] = set()
+
+    def _ensure_subscribed(channel: str) -> None:
+        """Ensure we have a subscriber for this channel."""
+        if channel not in _subscribed_channels:
+            bus.subscribe_outbound(channel, _outbound_via_callback)
+            _subscribed_channels.add(channel)
+            logger.info(f"Registered outbound subscriber for channel: {channel}")
+
+    # Pre-subscribe common channels
+    _ensure_subscribed("telegram")
+    _ensure_subscribed("api")
+    _ensure_subscribed("cli")
+
+    # Wire message tool to use bus (unified path)
+    async def _message_tool_send(msg: OutboundMessage) -> None:
+        _ensure_subscribed(msg.channel)
+        await bus.publish_outbound(msg)
+
+    message_tool = agent.tools.get("message")
+    if message_tool:
+        message_tool.set_send_callback(_message_tool_send)
+
     async def handle_message(request):
         data = await request.json()
         content = data.get("content", "")
@@ -481,25 +543,14 @@ def serve(
         callback_url = data.get("callback_url")
         session_key = f"{channel}:{chat_id}"
 
+        # Remember callback_url for this channel:chat_id
         if callback_url:
-            # Async mode: return immediately, send results via callback
+            _latest_callback_url[f"{channel}:{chat_id}"] = callback_url
+            _ensure_subscribed(channel)
+
+        if callback_url:
+            # Async mode: return immediately, send results via bus
             async def process_and_callback():
-                import httpx as httpx_client
-                from nanobot.bus.events import OutboundMessage
-
-                # Wire message tool to send via callback URL
-                async def send_via_callback(msg: OutboundMessage):
-                    async with httpx_client.AsyncClient(timeout=30) as c:
-                        await c.post(callback_url, json={
-                            "chat_id": msg.chat_id,
-                            "content": msg.content,
-                        })
-
-                message_tool = agent.tools.get("message")
-                original_callback = message_tool._send_callback if message_tool else None
-                if message_tool:
-                    message_tool.set_send_callback(send_via_callback)
-
                 try:
                     response = await agent.process_direct(
                         content=content,
@@ -507,27 +558,23 @@ def serve(
                         channel=channel,
                         chat_id=chat_id,
                     )
-                    # Send final result via callback
+                    # Send final result through unified bus path
                     if response:
-                        async with httpx_client.AsyncClient(timeout=30) as c:
-                            await c.post(callback_url, json={
-                                "chat_id": chat_id,
-                                "content": response,
-                            })
+                        await bus.publish_outbound(OutboundMessage(
+                            channel=channel,
+                            chat_id=chat_id,
+                            content=response,
+                        ))
                 except Exception as e:
-                    print(f"[nanobot] Async processing error: {e}")
+                    logger.error(f"Async processing error: {e}")
                     try:
-                        async with httpx_client.AsyncClient(timeout=10) as c:
-                            await c.post(callback_url, json={
-                                "chat_id": chat_id,
-                                "content": f"(Error processing request: {e})",
-                            })
+                        await bus.publish_outbound(OutboundMessage(
+                            channel=channel,
+                            chat_id=chat_id,
+                            content=f"(Error processing request: {e})",
+                        ))
                     except Exception:
                         pass
-                finally:
-                    # Restore original callback
-                    if message_tool and original_callback:
-                        message_tool.set_send_callback(original_callback)
 
             asyncio.create_task(process_and_callback())
             return aioweb.json_response({"status": "accepted"})
@@ -552,10 +599,14 @@ def serve(
         asyncio.create_task(cron.start())
         asyncio.create_task(heartbeat.start())
         asyncio.create_task(agent.run())
+        # Start unified outbound dispatcher
+        asyncio.create_task(bus.dispatch_outbound())
+        logger.info("Outbound dispatcher started (unified message delivery)")
 
     webapp.on_startup.append(on_startup)
 
     console.print(f"[green]✓[/green] Headless mode ready on port {port}")
+    console.print(f"[green]✓[/green] Unified outbound delivery enabled")
     aioweb.run_app(webapp, port=port, print=None)
 
 
