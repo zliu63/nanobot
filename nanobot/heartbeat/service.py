@@ -88,10 +88,20 @@ class HeartbeatService:
             self._task = None
     
     async def _run_loop(self) -> None:
-        """Main heartbeat loop."""
+        """Main heartbeat loop.
+        
+        First tick fires after a short delay (10s) to allow quick recovery
+        from blue-green switches (anti-amnesia). Subsequent ticks use the
+        normal interval.
+        """
+        first_tick = True
         while self._running:
             try:
-                await asyncio.sleep(self.interval_s)
+                if first_tick:
+                    await asyncio.sleep(10)
+                    first_tick = False
+                else:
+                    await asyncio.sleep(self.interval_s)
                 if self._running:
                     await self._tick()
             except asyncio.CancelledError:
