@@ -281,7 +281,10 @@ def gateway(
         import logging
         logging.basicConfig(level=logging.DEBUG)
 
-    console.print(f"{__logo__} Starting nanobot gateway on port {port}...")
+    # Detect blue/green identity
+    _nanobot_dir = Path(__file__).resolve().parents[1]
+    _identity = "🔵 blue" if "blue" in str(_nanobot_dir) else "🟢 green"
+    console.print(f"{__logo__} Starting nanobot gateway on port {port}... ({_identity})")
     
     config = load_config()
     bus = MessageBus()
