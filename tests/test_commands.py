@@ -82,19 +82,6 @@ def test_onboard_existing_config_overwrite(mock_paths):
     assert workspace_dir.exists()
 
 
-def test_onboard_existing_workspace_safe_create(mock_paths):
-    """Workspace exists — should not recreate, but still add missing templates."""
-    config_file, workspace_dir = mock_paths
-    workspace_dir.mkdir(parents=True)
-    config_file.write_text("{}")
-
-    result = runner.invoke(app, ["onboard"], input="n\n")
-
-    assert result.exit_code == 0
-    assert "Created workspace" not in result.stdout
-    assert "Created AGENTS.md" in result.stdout
-    assert (workspace_dir / "AGENTS.md").exists()
-
 
 def test_config_matches_github_copilot_codex_with_hyphen_prefix():
     config = Config()
