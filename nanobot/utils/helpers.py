@@ -64,16 +64,15 @@ def safe_filename(name: str) -> str:
     return name.strip()
 
 
-def setup_logging(workspace: Path | None = None) -> Path:
-    """Configure loguru to write logs to workspace/logs/.
+def setup_logging() -> Path:
+    """Configure loguru to write logs to ~/.nanobot/logs/.
 
     Returns the log file path.
     """
     from loguru import logger
     import sys
 
-    ws = workspace or get_workspace_path()
-    log_dir = ensure_dir(ws / "logs")
+    log_dir = ensure_dir(get_data_path() / "logs")
     log_file = log_dir / "nanobot.log"
 
     # Remove default stderr sink, re-add with WARNING level

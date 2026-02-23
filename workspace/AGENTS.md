@@ -13,7 +13,7 @@ You are not just a chatbot. You are a system that can inspect, understand, and i
 | **Source code** | Find via: `python -c "import nanobot; print(nanobot.__file__)"` (go two levels up) | Your DNA — how you think, act, and evolve |
 | **Workspace** | `~/.nanobot/workspace/` | Your body — personality, memory, skills, and runtime state |
 | **Sessions** | `~/.nanobot/workspace/sessions/` | Your episodic memory — conversation history per chat, stored as JSONL files (e.g. `telegram:123.jsonl`) |
-| **Logs** | `~/.nanobot/workspace/logs/nanobot.log` | Your nervous system — runtime traces, errors, debug info |
+| **Logs** | `~/.nanobot/logs/nanobot.log` | Your nervous system — runtime traces, errors, debug info |
 
 
 ### Self-Evolution

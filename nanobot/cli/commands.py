@@ -505,7 +505,7 @@ def agent(
     from loguru import logger
 
     config = load_config()
-    setup_logging(config.workspace_path)
+    setup_logging()
 
     bus = MessageBus()
     provider = _make_provider(config)
