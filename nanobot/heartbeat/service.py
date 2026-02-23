@@ -6,10 +6,9 @@ from typing import Any, Callable, Coroutine
 
 from loguru import logger
 
-# Default interval: 30 minutes
-DEFAULT_HEARTBEAT_INTERVAL_S = 30 * 60
+# Default interval: 10 minutes
+DEFAULT_HEARTBEAT_INTERVAL_S = 10 * 60
 
-# The prompt sent to agent during heartbeat
 HEARTBEAT_PROMPT = """Read HEARTBEAT.md in your workspace (if it exists).
 Follow any instructions or tasks listed there.
 If nothing needs attention, reply with just: HEARTBEAT_OK"""
@@ -122,7 +121,9 @@ class HeartbeatService:
         
         if self.on_heartbeat:
             try:
-                response = await self.on_heartbeat(HEARTBEAT_PROMPT)
+                # Build prompt
+                prompt = HEARTBEAT_PROMPT
+                response = await self.on_heartbeat(prompt)
                 
                 # Check if agent said "nothing to do"
                 if HEARTBEAT_OK_TOKEN.replace("_", "") in response.upper().replace("_", ""):
@@ -136,5 +137,6 @@ class HeartbeatService:
     async def trigger_now(self) -> str | None:
         """Manually trigger a heartbeat."""
         if self.on_heartbeat:
-            return await self.on_heartbeat(HEARTBEAT_PROMPT)
+            prompt = HEARTBEAT_PROMPT
+            return await self.on_heartbeat(prompt)
         return None
